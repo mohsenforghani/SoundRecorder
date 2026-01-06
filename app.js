@@ -1,86 +1,150 @@
-let mediaRecorder;
-let audioChunks = [];
-let audioBlob;
-let audioUrl;
-let audioContext = new (window.AudioContext || window.webkitAudioContext)();
-let sourceNode;
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+const masterGain = audioContext.createGain();
+masterGain.connect(audioContext.destination);
 
-const startBtn = document.getElementById("startBtn");
-const stopBtn = document.getElementById("stopBtn");
-const downloadBtn = document.getElementById("downloadBtn");
-const player = document.getElementById("player");
-const echoEffect = document.getElementById("echoEffect");
-const speedEffect = document.getElementById("speedEffect");
-
-// ضبط صدا
-startBtn.onclick = async () => {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (!stream) throw new Error("Stream ساخته نشد");
-
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-        mediaRecorder.onstop = async () => {
-            audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-            audioUrl = URL.createObjectURL(audioBlob);
-            await playWithEffects(audioBlob);
-            downloadBtn.disabled = false;
-        };
-
-        mediaRecorder.start();
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        console.log("ضبط شروع شد!");
-    } catch (err) {
-        console.error("خطا هنگام شروع ضبط:", err);
-        alert("ضبط صدا امکان‌پذیر نیست. مطمئن شوید که:\n1. صفحه روی localhost یا HTTPS است\n2. اجازه دسترسی میکروفن داده شده است\n3. مرورگر MediaRecorder را پشتیبانی می‌کند");
-    }
+document.getElementById("masterVolume").oninput = e => {
+  masterGain.gain.value = e.target.value;
 };
 
-// توقف ضبط
-stopBtn.onclick = () => {
-    mediaRecorder.stop();
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
+const timelineContainer = document.getElementById("timelineContainer");
+const cursorCanvas = document.getElementById("masterCursor");
+const cursorCtx = cursorCanvas.getContext("2d");
+
+cursorCanvas.width = window.innerWidth;
+cursorCanvas.height = window.innerHeight;
+
+const TIMELINE_COUNT = 10;
+const timelines = [];
+
+let isPlaying = false;
+let projectStartTime = 0;
+let animationId = null;
+
+// ==========================
+// ساخت تایم‌لاین‌ها
+// ==========================
+
+for (let i = 0; i < TIMELINE_COUNT; i++) {
+  createTimeline(i);
+}
+
+function createTimeline(index) {
+  const el = document.createElement("div");
+  el.className = "timeline";
+
+  el.innerHTML = `
+    <div class="timeline-header">
+      <button class="rec">● REC</button>
+      <button class="stop" disabled>■ STOP</button>
+    </div>
+    <canvas></canvas>
+  `;
+
+  const canvas = el.querySelector("canvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = timelineContainer.clientWidth - 40;
+  canvas.height = 60;
+
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 256;
+
+  timelines[index] = {
+    buffer: null,
+    startTime: 0,
+    analyser
+  };
+
+  let recorder;
+  let chunks = [];
+
+  el.querySelector(".rec").onclick = async () => {
+    chunks = [];
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
+    analyser.connect(masterGain);
+
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => chunks.push(e.data);
+
+    recorder.onstop = async () => {
+      const blob = new Blob(chunks);
+      const arrayBuffer = await blob.arrayBuffer();
+      timelines[index].buffer = await audioContext.decodeAudioData(arrayBuffer);
+    };
+
+    recorder.start();
+    drawEQ(analyser, ctx);
+  };
+
+  el.querySelector(".stop").onclick = () => recorder.stop();
+
+  timelineContainer.appendChild(el);
+}
+
+// ==========================
+// اکولایزر زنده تایم‌لاین
+// ==========================
+
+function drawEQ(analyser, ctx) {
+  const data = new Uint8Array(analyser.frequencyBinCount);
+
+  function draw() {
+    analyser.getByteFrequencyData(data);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    data.forEach((v, i) => {
+      ctx.fillStyle = "#888";
+      ctx.fillRect(i * 3, ctx.canvas.height, 2, -v);
+    });
+
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+// ==========================
+// Play سراسری
+// ==========================
+
+document.getElementById("masterPlay").onclick = () => {
+  if (isPlaying) return;
+
+  isPlaying = true;
+  projectStartTime = audioContext.currentTime;
+
+  timelines.forEach(tl => {
+    if (!tl.buffer) return;
+
+    const src = audioContext.createBufferSource();
+    src.buffer = tl.buffer;
+
+    const gain = audioContext.createGain();
+    src.connect(gain).connect(masterGain);
+
+    src.start(projectStartTime + tl.startTime);
+  });
+
+  animateCursor();
 };
 
-// دانلود
-downloadBtn.onclick = () => {
-    const a = document.createElement("a");
-    a.href = audioUrl;
-    a.download = "recording.wav";
-    a.click();
-};
+// ==========================
+// Cursor سراسری
+// ==========================
 
-// پخش با افکت
-async function playWithEffects(blob) {
-    const arrayBuffer = await blob.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+function animateCursor() {
+  cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
-    if (sourceNode) sourceNode.disconnect();
-    sourceNode = audioContext.createBufferSource();
-    sourceNode.buffer = audioBuffer;
+  const elapsed = audioContext.currentTime - projectStartTime;
+  const pixelsPerSecond = 100;
 
-    let node = sourceNode;
+  const x = elapsed * pixelsPerSecond;
 
-    // افکت Echo
-    if (echoEffect.checked) {
-        const delay = audioContext.createDelay();
-        delay.delayTime.value = 0.3; // 300ms
-        node.connect(delay);
-        delay.connect(audioContext.destination);
-    }
+  cursorCtx.strokeStyle = "red";
+  cursorCtx.beginPath();
+  cursorCtx.moveTo(x, 0);
+  cursorCtx.lineTo(x, cursorCanvas.height);
+  cursorCtx.stroke();
 
-    // تغییر سرعت
-    if (speedEffect.checked) {
-        sourceNode.playbackRate.value = 1.5;
-    }
-
-    node.connect(audioContext.destination);
-    sourceNode.start();
-
-    // برای نمایش در <audio> معمولی
-    player.src = audioUrl;
+  animationId = requestAnimationFrame(animateCursor);
 }
