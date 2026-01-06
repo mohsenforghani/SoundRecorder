@@ -1,63 +1,44 @@
 <!DOCTYPE html>
-<html lang="fa">
+<html lang="fa" dir="ltr">
 <head>
-  <meta charset="UTF-8">
-  <title>Mehraad SR</title>
-
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#111111">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b0b10" />
+  <title>Mehraad SR — Web Audio DAW</title>
 
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="./style.css">
 </head>
 
 <body>
+  <!-- Master Controls (must match style.css and app.js IDs) -->
+  <div id="masterControls" role="toolbar" aria-label="Master controls">
+    <div class="small-muted master-label" style="margin-right:6px;font-weight:700;">Mehraad SR</div>
 
-<!-- ================= HEADER ================= -->
-<header>
-  <h1>Mehraad SR</h1>
+    <button id="masterPlay" aria-label="Play" title="Play">▶</button>
+    <button id="masterStop" aria-label="Stop" title="Stop">■</button>
 
-  <div class="transport">
-    <button id="masterPlay">▶ Play</button>
-    <button id="masterStop">■ Stop</button>
+    <div class="master-volume" style="margin-left:12px;">
+      <label for="masterVolume" class="master-label">MASTER VOLUME</label>
+      <input id="masterVolume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Master volume">
+    </div>
   </div>
-</header>
 
-<!-- ================= MASTER CONTROLS ================= -->
-<section class="controls">
-  <label class="volume">
-    <span>MASTER VOLUME</span>
-    <input
-      type="range"
-      id="masterVolume"
-      min="0"
-      max="1"
-      step="0.01"
-      value="1"
-    >
-  </label>
-</section>
+  <!-- Timeline area: JS will populate 10 timelines into this container -->
+  <main id="timelineContainer" role="main" aria-label="Timelines">
+    <!-- timelines (cards) are created dynamically by app.js -->
+  </main>
 
-<!-- ================= TIMELINES ================= -->
-<section class="timeline-container" id="timelineContainer">
-  <!-- 10 تایم‌لاین توسط app.js ساخته می‌شوند -->
-</section>
+  <!-- Global cursor canvas (position and pointer-events controlled by CSS) -->
+  <canvas id="masterCursor" aria-hidden="false" role="application" title="Project cursor"></canvas>
 
-<!-- ================= GLOBAL CURSOR ================= -->
-<canvas id="masterCursor"></canvas>
+  <!-- Scripts (app.js must be loaded after DOM elements above) -->
+  <script src="./app.js" defer></script>
 
-<!-- ================= SCRIPTS ================= -->
-<script src="app.js"></script>
-
-<script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js');
-  }
-</script>
-
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(err => console.warn("SW registration failed:", err));
+    }
+  </script>
 </body>
 </html>
-
-
-
-
