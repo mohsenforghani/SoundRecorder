@@ -1,52 +1,91 @@
-// ====================
-// Part 1: Timeline & Recording Setup
-// ====================
+// app.js - Smart Cursor DAW (complete)
+// - Scrubbing (real-time) with fade
+// - Click/drag/touch cursor => immediate sound
+// - Play-from-cursor scheduling
+// - 10-minute tracks, paging, per-track offset dragging
+// - Mouse + touch support
 
+// -------------------- Core audio setup --------------------
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 const masterGain = audioContext.createGain();
 masterGain.connect(audioContext.destination);
 
-// CONFIG
-const PIXELS_PER_SECOND = 50;
-const TRACK_DURATION_SECONDS = 600; // 10 دقیقه
+// -------------------- Config --------------------
+const PIXELS_PER_SECOND = 50;              // px per second (adjustable)
+const TRACK_DURATION_SECONDS = 600;        // 10 minutes
 const TRACK_WIDTH_PX = TRACK_DURATION_SECONDS * PIXELS_PER_SECOND;
+const SCRUB_SLICE_SEC = 0.08;              // slice length when scrubbing (80ms)
+const SCRUB_THROTTLE_MS = 30;              // minimum ms between scrub audio triggers
+const SCRUB_FADE_MS = 0.008;               // 8ms fade in/out to avoid clicks
 
+// -------------------- DOM refs --------------------
 const timelineContainer = document.getElementById("timelineContainer");
 const cursorCanvas = document.getElementById("masterCursor");
 const cursorCtx = cursorCanvas.getContext("2d");
 const masterPlayBtn = document.getElementById("masterPlay");
 const masterVolumeEl = document.getElementById("masterVolume");
 
+// ensure cursorCanvas size matches viewport area reserved for tracks (call on resize)
 function resizeCursorCanvas() {
   cursorCanvas.width = window.innerWidth;
-  cursorCanvas.height = window.innerHeight - 140;
+  cursorCanvas.height = Math.max(200, window.innerHeight - 140); // keep visible area
 }
 resizeCursorCanvas();
 window.addEventListener("resize", resizeCursorCanvas);
 
+// master volume
 if (masterVolumeEl) masterVolumeEl.oninput = e => masterGain.gain.value = Number(e.target.value);
 
-// Model
+// -------------------- Model --------------------
 const TIMELINE_COUNT = 10;
-const timelines = [];
+const timelines = []; // each: { buffer, startTime, canvas, ctx, trackEl, analyser, ... }
 
 let isPlaying = false;
-let projectStartTime = 0;
+let projectStartTime = 0;              // audioContext.time corresponding to project time zero offset
 let animationId = null;
 
+// paging
 let currentPage = 0;
 const pageWidth = window.innerWidth;
 
-// resume audio context helper
+// scrubbing state
+let isScrubbing = false;
+let lastScrubTime = 0;
+let activeScrubSources = []; // { src, gainNode, stopTimeout }
+let lastPerformScrubAt = 0;
+
+// helper: resume audioContext on first gesture
 async function ensureAudioContextRunning() {
   if (audioContext.state === "suspended") {
-    try { await audioContext.resume(); } catch (e) { console.warn(e); }
+    try { await audioContext.resume(); } catch (e) { console.warn("resume failed", e); }
   }
 }
 
-// -------------------------
-// Timeline creation
-// -------------------------
+// -------------------- Utility: stop/cleanup --------------------
+function stopAllSources() {
+  timelines.forEach(tl => {
+    if (tl.sourceNodes && tl.sourceNodes.length) {
+      tl.sourceNodes.forEach(s => {
+        try { s.stop(); } catch (e) {}
+      });
+      tl.sourceNodes = [];
+    }
+  });
+  if (animationId) cancelAnimationFrame(animationId);
+  animationId = null;
+  isPlaying = false;
+}
+
+// clear scrub short-sources
+function clearScrubSources() {
+  activeScrubSources.forEach(item => {
+    try { item.src.stop(); } catch (e) {}
+    clearTimeout(item.stopTimeout);
+  });
+  activeScrubSources = [];
+}
+
+// -------------------- Create timelines (record, draw) --------------------
 for (let i = 0; i < TIMELINE_COUNT; i++) createTimeline(i);
 
 function createTimeline(index) {
@@ -55,10 +94,14 @@ function createTimeline(index) {
 
   el.innerHTML = `
     <div class="timeline-header">
-      <button class="rec">● REC</button>
-      <button class="stop" disabled>■ STOP</button>
-      <span class="timeline-info">Track ${index + 1}</span>
-      <span class="start-time-display">start: 0.00s</span>
+      <div style="display:flex;align-items:center;">
+        <button class="rec">● REC</button>
+        <button class="stop" disabled>■ STOP</button>
+        <span class="timeline-info" style="margin-left:10px;">Track ${index+1}</span>
+      </div>
+      <div style="display:flex;align-items:center;">
+        <span class="start-time-display" style="font-size:12px;color:#bbb;margin-left:12px;">start: 0.00s</span>
+      </div>
     </div>
     <div class="timeline-track" style="overflow-x:auto;">
       <canvas class="wave-canvas"></canvas>
@@ -90,20 +133,28 @@ function createTimeline(index) {
     recorder: null,
     mediaStream: null,
     sourceNodes: [],
-    dragOffsetX: 0,    
-    isDraggingTimeline: false
+    // drag timeline
+    isDraggingTimeline: false,
+    dragStartX: 0,
+    dragStartOffset: 0
   };
 
-  // -------------------------
-  // Drag timeline to adjust startTime
-  // -------------------------
-  canvas.addEventListener("mousedown", (e) => {
-    timelines[index].isDraggingTimeline = true;
-    timelines[index].dragStartX = e.clientX;
-    timelines[index].dragStartOffset = timelines[index].startTime;
+  // drag timeline to adjust startTime (mouse + touch)
+  canvas.addEventListener("pointerdown", (e) => {
+    // only start drag if pointer is primary
+    if (e.isPrimary) {
+      timelines[index].isDraggingTimeline = true;
+      timelines[index].dragStartX = e.clientX;
+      timelines[index].dragStartOffset = timelines[index].startTime;
+      e.preventDefault();
+    }
   });
-  window.addEventListener("mouseup", () => { timelines[index].isDraggingTimeline = false; });
-  window.addEventListener("mousemove", (e) => {
+
+  window.addEventListener("pointerup", () => {
+    timelines[index].isDraggingTimeline = false;
+  });
+
+  window.addEventListener("pointermove", (e) => {
     const tl = timelines[index];
     if (!tl.isDraggingTimeline) return;
     const dx = e.clientX - tl.dragStartX;
@@ -113,9 +164,7 @@ function createTimeline(index) {
     if (startDisplay) startDisplay.innerText = `start: ${tl.startTime.toFixed(2)}s`;
   });
 
-  // -------------------------
-  // Buttons: REC & STOP
-  // -------------------------
+  // Buttons
   const recBtn = el.querySelector(".rec");
   const stopBtn = el.querySelector(".stop");
   const startTimeDisplay = el.querySelector(".start-time-display");
@@ -124,10 +173,20 @@ function createTimeline(index) {
     startTimeDisplay.innerText = `start: ${timelines[index].startTime.toFixed(2)}s`;
   }
 
-  recBtn.onclick = async () => {
+  // Click canvas to set project cursor
+  canvas.addEventListener("click", (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const clickX = ev.clientX - rect.left;
+    const globalX = clickX + trackEl.scrollLeft;
+    setProjectCursorTime(globalX / PIXELS_PER_SECOND);
+  });
+
+  // REC handler
+  recBtn.addEventListener("click", async () => {
     await ensureAudioContextRunning();
     if (timelines[index].isRecording) return;
 
+    // set startTime to current cursor position (use project cursor)
     timelines[index].startTime = Math.max(0, projectCursorTime);
     updateStartDisplay();
 
@@ -139,10 +198,9 @@ function createTimeline(index) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       timelines[index].mediaStream = stream;
-
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(timelines[index].analyser);
-      source.connect(masterGain);
+      source.connect(masterGain); // monitor while recording
 
       const recorder = new MediaRecorder(stream);
       timelines[index].recorder = recorder;
@@ -155,10 +213,14 @@ function createTimeline(index) {
         try {
           timelines[index].buffer = await audioContext.decodeAudioData(arrayBuffer);
           drawPersistentWaveform(index);
-        } catch(err){ console.error(err); }
-
+        } catch (err) {
+          console.error("decodeAudioData error", err);
+        }
         timelines[index].isRecording = false;
-        if(timelines[index].mediaStream){ timelines[index].mediaStream.getTracks().forEach(t=>t.stop()); timelines[index].mediaStream = null; }
+        if (timelines[index].mediaStream) {
+          timelines[index].mediaStream.getTracks().forEach(t => t.stop());
+          timelines[index].mediaStream = null;
+        }
         timelines[index].recorder = null;
         recBtn.disabled = false;
         stopBtn.disabled = true;
@@ -166,123 +228,111 @@ function createTimeline(index) {
 
       recorder.start();
       drawLiveWaveform(index);
-
-    } catch(err){
-      console.error(err);
+    } catch (err) {
+      console.error("getUserMedia error", err);
       timelines[index].isRecording = false;
       recBtn.disabled = false;
       stopBtn.disabled = true;
     }
-  };
-
-  stopBtn.onclick = () => {
-    if (timelines[index].recorder && timelines[index].recorder.state==="recording") timelines[index].recorder.stop();
-  };
-
-  // Click on track to set cursor
-  canvas.addEventListener("click", (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    const clickX = ev.clientX - rect.left;
-    const globalX = clickX + trackEl.scrollLeft;
-    setProjectCursorTime(globalX / PIXELS_PER_SECOND);
   });
 
-  // Scroll syncing across tracks
+  // STOP handler
+  stopBtn.addEventListener("click", () => {
+    const rec = timelines[index].recorder;
+    if (rec && rec.state === "recording") rec.stop();
+  });
+
+  // scroll syncing across tracks
   trackEl.addEventListener("scroll", () => {
     const newPage = Math.floor(trackEl.scrollLeft / pageWidth);
-    if (newPage !== currentPage){
+    if (newPage !== currentPage) {
       currentPage = newPage;
       syncAllTracksToPage(currentPage);
     }
   });
 }
 
-// -------------------------
-// Live waveform (recording)
-// -------------------------
-function drawLiveWaveform(index){
+// -------------------- draw live waveform --------------------
+function drawLiveWaveform(index) {
   const tl = timelines[index];
-  if (!tl.isRecording) return;
+  if (!tl || !tl.isRecording) return;
   const { analyser, analyserData, canvas, ctx } = tl;
   const w = canvas.width; const h = canvas.height;
 
-  function loop(){
+  function loop() {
     if (!tl.isRecording) return;
     analyser.getByteTimeDomainData(analyserData);
-    ctx.fillStyle = "rgba(0,0,0,0.15)";
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
     ctx.fillRect(0,0,w,h);
 
     ctx.lineWidth = 2;
     ctx.strokeStyle = "#7be8a6";
     ctx.beginPath();
-    const sliceWidth = w / analyserData.length;
+    const sliceW = w / analyserData.length;
     let x=0;
-    for(let i=0;i<analyserData.length;i++){
-      const v=analyserData[i]/128.0;
-      const y=v*(h/2);
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-      x+=sliceWidth;
+    for (let i=0;i<analyserData.length;i++){
+      const v = analyserData[i]/128.0;
+      const y = v * (h/2);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      x += sliceW;
     }
     ctx.stroke();
     requestAnimationFrame(loop);
   }
-  ctx.clearRect(0,0,w,h);
-  ctx.fillStyle="rgba(0,0,0,0.3)";
-  ctx.fillRect(0,0,w,h);
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle="rgba(0,0,0,0.26)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
   loop();
 }
 
-// -------------------------
-// Persistent waveform draw
-// -------------------------
-function drawPersistentWaveform(index){
+// -------------------- draw persistent waveform --------------------
+function drawPersistentWaveform(index) {
   const tl = timelines[index];
-  if(!tl || !tl.buffer) return;
+  if (!tl || !tl.buffer) return;
   const buffer = tl.buffer;
-  const canvas = tl.canvas; const ctx = tl.ctx;
+  const canvas = tl.canvas;
+  const ctx = tl.ctx;
   const w = canvas.width; const h = canvas.height;
   ctx.clearRect(0,0,w,h);
-
-  const channel = buffer.numberOfChannels>0 ? buffer.getChannelData(0) : new Float32Array(0);
+  const channel = buffer.numberOfChannels > 0 ? buffer.getChannelData(0) : new Float32Array(0);
   const len = channel.length;
-  if(len===0) return;
-
-  const samplesPerPixel = Math.max(1, Math.floor(len/w));
-  ctx.fillStyle="rgba(10,20,30,0.4)";
-  ctx.fillRect(0,0,w,h);
-  ctx.fillStyle="#8fc1ff";
-  const mid=h/2;
-
-  for(let x=0;x<w;x++){
-    const start=x*samplesPerPixel;
-    let min=1.0,max=-1.0;
-    for(let j=0;j<samplesPerPixel&&(start+j)<len;j++){
-      const v=channel[start+j];
-      if(v<min) min=v;
-      if(v>max) max=v;
+  if (len === 0) return;
+  const spp = Math.max(1, Math.floor(len / w));
+  ctx.fillStyle = "rgba(10,20,30,0.4)"; ctx.fillRect(0,0,w,h);
+  ctx.fillStyle = "#8fc1ff";
+  const mid = h/2;
+  for (let x=0; x < w; x++) {
+    const start = x*spp;
+    let min = 1.0, max = -1.0;
+    for (let j=0; j < spp && (start+j) < len; j++){
+      const v = channel[start+j];
+      if (v < min) min = v;
+      if (v > max) max = v;
     }
-    const y1=mid+min*mid;
-    const y2=mid+max*mid;
-    ctx.fillRect(x,y1,1,Math.max(1,y2-y1));
+    const y1 = mid + min*mid;
+    const y2 = mid + max*mid;
+    ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
   }
 }
 
-// -------------------------
-// Cursor basic setup
-// -------------------------
-let projectCursorTime=0;
-function setProjectCursorTime(t){ projectCursorTime = Math.max(0, Math.min(t, TRACK_DURATION_SECONDS)); updateCursorVisual(); }
-function getProjectCursorTime(){ return projectCursorTime; }
-let projectCursorTimeAtPlayStart=0;
-function syncAllTracksToPage(pageIndex){
-  const scrollLeft = pageIndex*pageWidth;
-  timelines.forEach(tl=>{ if(tl && tl.trackEl) tl.trackEl.scrollLeft=scrollLeft; });
+// -------------------- Cursor management --------------------
+let projectCursorTime = 0;            // seconds
+let projectCursorTimeAtPlayStart = 0; // seconds recorded at play start (offset)
+function setProjectCursorTime(t) {
+  projectCursorTime = Math.max(0, Math.min(t, TRACK_DURATION_SECONDS));
+  updateCursorVisual();
 }
-// ============================
-// Part 2: Smart Cursor & Scrubbing
-// ============================
 
-// Draw cursor in viewport
+function getProjectCursorTime() {
+  if (isPlaying) {
+    const elapsedSinceStart = audioContext.currentTime - projectStartTime;
+    return Math.max(0, elapsedSinceStart + projectCursorTimeAtPlayStart);
+  }
+  return projectCursorTime;
+}
+
+// update cursor visual and handle paging
 function updateCursorVisual() {
   const globalX = projectCursorTime * PIXELS_PER_SECOND;
   const newPage = Math.floor(globalX / pageWidth);
@@ -292,7 +342,8 @@ function updateCursorVisual() {
   }
   const screenX = globalX - currentPage * pageWidth;
 
-  cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+  // draw cursor line
+  cursorCtx.clearRect(0,0,cursorCanvas.width,cursorCanvas.height);
   cursorCtx.strokeStyle = "red";
   cursorCtx.lineWidth = 2;
   cursorCtx.beginPath();
@@ -301,109 +352,210 @@ function updateCursorVisual() {
   cursorCtx.stroke();
 }
 
-// Click on cursor canvas sets cursor time
-cursorCanvas.addEventListener("click", (e) => {
+// sync scrollLeft of all tracks to pageIndex
+function syncAllTracksToPage(pageIndex) {
+  const scrollLeft = pageIndex * pageWidth;
+  timelines.forEach(tl => { if (tl && tl.trackEl) tl.trackEl.scrollLeft = scrollLeft; });
+}
+
+// -------------------- Scrubbing (real-time) --------------------
+function performScrubAt(cursorTime) {
+  const now = performance.now();
+  if (now - lastPerformScrubAt < SCRUB_THROTTLE_MS) return; // throttle
+  lastPerformScrubAt = now;
+
+  if (!timelines || timelines.length === 0) return;
+  clearScrubSources();
+
+  timelines.forEach(tl => {
+    if (!tl || !tl.buffer) return;
+    const clipStart = tl.startTime || 0;
+    const bufDur = tl.buffer.duration;
+    const localPos = cursorTime - clipStart;
+    if (localPos < 0 || localPos >= bufDur) return;
+
+    // create source for short slice
+    const src = audioContext.createBufferSource();
+    src.buffer = tl.buffer;
+
+    // create gain with tiny fade-in/out to avoid clicks
+    const g = audioContext.createGain();
+    const nowTime = audioContext.currentTime;
+    g.gain.setValueAtTime(0.0, nowTime);
+    g.gain.linearRampToValueAtTime(1.0, nowTime + SCRUB_FADE_MS);
+    // schedule fade out slightly before stop (will call stop via timeout still)
+    g.connect(masterGain);
+    src.connect(g);
+
+    try {
+      src.start(0, Math.max(0, localPos), SCRUB_SLICE_SEC);
+    } catch (e) {
+      try { src.start(0, Math.max(0, localPos), SCRUB_SLICE_SEC / 2); } catch (e2) { console.warn("scrub start failed", e2); }
+    }
+
+    // schedule fade out
+    const stopAt = audioContext.currentTime + SCRUB_SLICE_SEC;
+    g.gain.linearRampToValueAtTime(0.0, stopAt - SCRUB_FADE_MS);
+    // ensure src stop via timeout in case onended not timely
+    const stopTimeout = setTimeout(()=> {
+      try { src.stop(); } catch(e) {}
+    }, Math.ceil(SCRUB_SLICE_SEC*1000)+50);
+
+    activeScrubSources.push({ src, gainNode: g, stopTimeout });
+    // cleanup onended
+    src.onended = () => { clearTimeout(stopTimeout); activeScrubSources = activeScrubSources.filter(it => it.src !== src); };
+  });
+}
+
+// scrubbing loop (called while scrubbing)
+let scrubRAF = null;
+function scrubLoop() {
+  if (!isScrubbing) return;
+  performScrubAt(projectCursorTime);
+  scrubRAF = requestAnimationFrame(scrubLoop);
+}
+
+// start scrubbing (enter scrub mode)
+function startScrubMode() {
+  // stop any full playback
+  if (isPlaying) stopAllSources();
+  isScrubbing = true;
+  lastPerformScrubAt = 0;
+  if (!scrubRAF) scrubLoop();
+}
+
+// stop scrubbing and cleanup
+function stopScrubMode() {
+  isScrubbing = false;
+  if (scrubRAF) { cancelAnimationFrame(scrubRAF); scrubRAF = null; }
+  clearScrubSources();
+}
+
+// -------------------- Cursor interactions (mouse/touch/pointer unified) --------------------
+
+// allow pointer events — ensure in CSS #masterCursor { pointer-events: auto; }
+let draggingCursor = false;
+
+cursorCanvas.addEventListener("pointerdown", (e) => {
+  if (!e.isPrimary) return;
+  // compute pointer position
   const rect = cursorCanvas.getBoundingClientRect();
   const clickX = e.clientX - rect.left;
   const globalX = currentPage * pageWidth + clickX;
   setProjectCursorTime(globalX / PIXELS_PER_SECOND);
-  if(isPlaying) scrubPlayFromCursor();
+  // start scrubbing
+  startScrubMode();
+  draggingCursor = true;
+  e.preventDefault();
 });
 
-// Drag cursor
-let isDraggingCursor = false;
-cursorCanvas.addEventListener("mousedown", (e) => { isDraggingCursor = true; scrubPlayFromCursor(); });
-window.addEventListener("mouseup", () => { isDraggingCursor = false; stopAllSources(); });
-window.addEventListener("mousemove", (e) => {
-  if (!isDraggingCursor) return;
+window.addEventListener("pointermove", (e) => {
+  if (!draggingCursor) return;
   const rect = cursorCanvas.getBoundingClientRect();
   const moveX = e.clientX - rect.left;
   const globalX = currentPage * pageWidth + moveX;
   setProjectCursorTime(globalX / PIXELS_PER_SECOND);
-  scrubPlayFromCursor();
+  // scrub will pick up via scrubLoop
 });
 
-
-cursorCanvas.addEventListener("touchstart", (e)=> { isDraggingCursor=true; });
-window.addEventListener("touchend", ()=>{ isDraggingCursor=false; });
-window.addEventListener("touchmove", (e)=>{
-  if(!isDraggingCursor) return;
-  const touch=e.touches[0];
-  const rect=cursorCanvas.getBoundingClientRect();
-  const moveX=touch.clientX-rect.left;
-  const globalX=currentPage*pageWidth+moveX;
-  setProjectCursorTime(globalX/PIXELS_PER_SECOND);
+window.addEventListener("pointerup", (e) => {
+  if (!draggingCursor) return;
+  draggingCursor = false;
+  // stop scrubbing but also start full playback from cursor if desired
+  stopScrubMode();
+  // auto-start playback from cursor on release if user prefers:
+  // startPlaybackFromCursor();
 });
 
-
-// Also allow clicking on timeline track to set cursor
+// clicking on track canvases: single-shot scrub
 timelineContainer.addEventListener("click", (e) => {
-  const target = e.target;
-  if (target && target.classList && target.classList.contains("wave-canvas")) {
-    const canvas = target;
-    const rect = canvas.getBoundingClientRect();
+  const t = e.target;
+  if (t && t.classList && t.classList.contains("wave-canvas")) {
+    const rect = t.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
-    const parent = canvas.parentElement;
+    const parent = t.parentElement; // trackEl
     const globalX = clickX + parent.scrollLeft;
     setProjectCursorTime(globalX / PIXELS_PER_SECOND);
-    if(isPlaying) scrubPlayFromCursor();
+    // single-shot scrub (play short slices)
+    performScrubAt(projectCursorTime);
+    setTimeout(()=> clearScrubSources(), Math.ceil(SCRUB_SLICE_SEC*1000)+60);
   }
 });
 
-// ---------------------------
-// Scrubbing: play all timelines from cursor
-// ---------------------------
-function scrubPlayFromCursor() {
-  if (!isPlaying) return;
+// -------------------- Play-from-cursor (master play) --------------------
+masterPlayBtn.addEventListener("click", async () => {
+  if (isPlaying) {
+    // stop if playing
+    stopAllSources();
+    updateCursorVisual();
+    return;
+  }
+  await ensureAudioContextRunning();
 
-  stopAllSources(); // stop previous playback
-
-  const startAt = audioContext.currentTime + 0.01; // small delay
+  // prepare playback starting at current cursor
   projectCursorTimeAtPlayStart = projectCursorTime;
+  const startAt = audioContext.currentTime + 0.05; // small scheduling delay
   projectStartTime = startAt - projectCursorTimeAtPlayStart;
 
+  // stop any scrub-sources
+  stopScrubMode();
+  clearScrubSources();
+  stopAllSources();
+
+  // schedule buffers
   timelines.forEach(tl => {
-    if (!tl.buffer) return;
+    if (!tl || !tl.buffer) return;
     const buf = tl.buffer;
     const clipStart = tl.startTime || 0;
     const clipEnd = clipStart + buf.duration;
     const playFrom = projectCursorTimeAtPlayStart;
-
-    if (clipEnd <= playFrom) return;
+    if (clipEnd <= playFrom) return; // nothing to play
 
     const src = audioContext.createBufferSource();
     src.buffer = buf;
     const trackGain = audioContext.createGain();
+    trackGain.gain.value = 1.0;
     src.connect(trackGain).connect(masterGain);
 
     if (clipStart <= playFrom) {
+      // clip started earlier -> start immediately and offset into buffer
       const offset = Math.max(0, playFrom - clipStart);
-      try { src.start(startAt, offset); } catch(e){console.warn(e);}
+      try { src.start(startAt, offset); } catch(e){ console.warn("start error", e); }
     } else {
+      // clip starts after cursor -> schedule later
       const when = startAt + (clipStart - playFrom);
-      try { src.start(when, 0); } catch(e){console.warn(e);}
+      try { src.start(when, 0); } catch(e){ console.warn("start error", e); }
     }
 
     tl.sourceNodes = tl.sourceNodes || [];
     tl.sourceNodes.push(src);
-    src.onended = () => { tl.sourceNodes = tl.sourceNodes.filter(s => s!==src); };
+    src.onended = () => { tl.sourceNodes = tl.sourceNodes.filter(s => s !== src); };
   });
 
+  isPlaying = true;
   animateCursorDuringPlay();
-}
+});
 
-// animate cursor in real-time
+// animate cursor while playing
 function animateCursorDuringPlay() {
-  if(!isPlaying) return;
+  if (!isPlaying) return;
   const elapsed = audioContext.currentTime - projectStartTime;
-  projectCursorTime = elapsed;
+  projectCursorTime = elapsed; // updates absolute project time
   updateCursorVisual();
 
-  if(projectCursorTime >= TRACK_DURATION_SECONDS){
+  // if reach end
+  if (projectCursorTime >= TRACK_DURATION_SECONDS) {
     stopAllSources();
     return;
   }
-
   animationId = requestAnimationFrame(animateCursorDuringPlay);
 }
 
+// convenience: start playback from cursor (callable)
+async function startPlaybackFromCursor() {
+  if (isPlaying) return;
+  masterPlayBtn.click();
+}
+
+// initial visual
+updateCursorVisual();
