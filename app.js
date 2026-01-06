@@ -57,30 +57,42 @@ function createTimeline(index) {
   let recorder;
   let chunks = [];
 
-  el.querySelector(".rec").onclick = async () => {
-    chunks = [];
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const source = audioContext.createMediaStreamSource(stream);
-    source.connect(analyser);
-    analyser.connect(masterGain);
+ el.querySelector(".rec").onclick = async () => {
+  const recBtn = el.querySelector(".rec");
+  const stopBtn = el.querySelector(".stop");
 
-    recorder = new MediaRecorder(stream);
-    recorder.ondataavailable = e => chunks.push(e.data);
+  recBtn.disabled = true;
+  stopBtn.disabled = false;
 
-    recorder.onstop = async () => {
-      const blob = new Blob(chunks);
-      const arrayBuffer = await blob.arrayBuffer();
-      timelines[index].buffer = await audioContext.decodeAudioData(arrayBuffer);
-    };
+  chunks = [];
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const source = audioContext.createMediaStreamSource(stream);
 
-    recorder.start();
-    drawEQ(analyser, ctx);
+  // اتصال همزمان به Analyser و MasterGain
+  source.connect(analyser);
+  source.connect(masterGain);
+
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => chunks.push(e.data);
+
+  recorder.onstop = async () => {
+    const blob = new Blob(chunks);
+    const arrayBuffer = await blob.arrayBuffer();
+    timelines[index].buffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    recBtn.disabled = false;
+    stopBtn.disabled = true;
   };
 
-  el.querySelector(".stop").onclick = () => recorder.stop();
+  recorder.start();
+  drawEQ(analyser, ctx);
+};
 
-  timelineContainer.appendChild(el);
-}
+el.querySelector(".stop").onclick = () => {
+  if (recorder && recorder.state === "recording") {
+    recorder.stop();
+  }
+};
 
 // ==========================
 // اکولایزر زنده تایم‌لاین
@@ -148,3 +160,4 @@ function animateCursor() {
 
   animationId = requestAnimationFrame(animateCursor);
 }
+
