@@ -77,20 +77,50 @@ function createTimeline(index) {
   const analyserData = new Uint8Array(analyser.fftSize);
 
   timelines[index] = {
-    buffer: null,
-    startTime: 0,
-    canvas,
-    ctx,
-    trackEl,
-    analyser,
-    analyserData,
-    isRecording: false,
-    chunks: null,
-    recorder: null,
-    mediaStream: null,
-    sourceNodes: []
-  };
+  buffer: null,
+  startTime: 0,
+  canvas,
+  ctx,
+  trackEl,
+  analyser,
+  analyserData,
+  isRecording: false,
+  chunks: null,
+  recorder: null,
+  mediaStream: null,
+  sourceNodes: [],
+  dragOffsetX: 0,    
+  isDraggingTimeline: false
+};
 
+
+  // -------------------------
+// Drag timeline to adjust startTime
+// -------------------------
+canvas.addEventListener("mousedown", (e) => {
+  if (e.target !== canvas) return;
+  timelines[index].isDraggingTimeline = true;
+  timelines[index].dragStartX = e.clientX;
+  timelines[index].dragStartOffset = timelines[index].startTime;
+});
+window.addEventListener("mouseup", () => {
+  timelines[index].isDraggingTimeline = false;
+});
+window.addEventListener("mousemove", (e) => {
+  const tl = timelines[index];
+  if (!tl.isDraggingTimeline) return;
+  
+  const dx = e.clientX - tl.dragStartX; // پیکسل تغییر
+  const deltaTime = dx / PIXELS_PER_SECOND; // تبدیل px → ثانیه
+  tl.startTime = Math.max(0, tl.dragStartOffset + deltaTime);
+  
+  // بروزرسانی نمایش startTime
+  const startDisplay = tl.trackEl.parentElement.querySelector(".start-time-display");
+  if (startDisplay) startDisplay.innerText = `start: ${tl.startTime.toFixed(2)}s`;
+});
+
+
+  
   // show start time text
   const startTimeDisplay = el.querySelector(".start-time-display");
   function updateStartDisplay() {
@@ -463,3 +493,4 @@ masterPlayBtn.addEventListener("dblclick", () => {
 
 // initial draw of cursor
 updateCursorVisual();
+
