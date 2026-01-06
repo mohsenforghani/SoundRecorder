@@ -25,6 +25,20 @@ const cursorCtx = cursorCanvas.getContext("2d");
 const masterPlayBtn = document.getElementById("masterPlay");
 const masterVolumeEl = document.getElementById("masterVolume");
 
+
+// create cursor handle element (one-time)
+let cursorHandle = document.getElementById('cursorHandle');
+if (!cursorHandle) {
+  cursorHandle = document.createElement('div');
+  cursorHandle.id = 'cursorHandle';
+  // add a child for nicer hit area (optional)
+  const hit = document.createElement('div');
+  hit.className = 'hit';
+  cursorHandle.appendChild(hit);
+  document.body.appendChild(cursorHandle);
+}
+
+
 // ensure cursorCanvas size matches viewport area reserved for tracks (call on resize)
 function resizeCursorCanvas() {
   cursorCanvas.width = window.innerWidth;
@@ -342,7 +356,7 @@ function updateCursorVisual() {
   }
   const screenX = globalX - currentPage * pageWidth;
 
-  // draw cursor line
+  // draw cursor line on canvas
   cursorCtx.clearRect(0,0,cursorCanvas.width,cursorCanvas.height);
   cursorCtx.strokeStyle = "red";
   cursorCtx.lineWidth = 2;
@@ -350,6 +364,16 @@ function updateCursorVisual() {
   cursorCtx.moveTo(screenX, 0);
   cursorCtx.lineTo(screenX, cursorCanvas.height);
   cursorCtx.stroke();
+
+  // position the handle centered on the same X (handle is absolute positioned in body)
+  if (cursorHandle) {
+    // compute top relative to document: use cursorCanvas.getBoundingClientRect().top
+    const rect = cursorCanvas.getBoundingClientRect();
+    const handleLeft = (currentPage * pageWidth + screenX) - (cursorHandle.offsetWidth / 2);
+    cursorHandle.style.left = `${handleLeft}px`;
+    cursorHandle.style.top = `${rect.top}px`;
+    cursorHandle.style.height = `${rect.height}px`;
+  }
 }
 
 // sync scrollLeft of all tracks to pageIndex
@@ -559,3 +583,4 @@ async function startPlaybackFromCursor() {
 
 // initial visual
 updateCursorVisual();
+
