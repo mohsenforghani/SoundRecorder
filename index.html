@@ -2,7 +2,7 @@
 <html lang="fa">
 <head>
   <meta charset="UTF-8">
-  <title>Mehraad Recorder</title>
+  <title>Web Audio DAW</title>
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#111111">
@@ -15,7 +15,7 @@
 
 <!-- ================= HEADER ================= -->
 <header>
-  <h1>Mehraad Recorder</h1>
+  <h1>Web Audio DAW</h1>
 
   <div class="transport">
     <button id="masterPlay">▶ Play</button>
@@ -26,7 +26,7 @@
 <!-- ================= MASTER CONTROLS ================= -->
 <section class="controls">
   <label class="volume">
-    <span>Time lines</span>
+    <span>MASTER VOLUME</span>
     <input
       type="range"
       id="masterVolume"
@@ -51,12 +51,9 @@
 
 <script>
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js');
+    navigator.serviceWorker.register('service-worker.js');
   }
 </script>
 
 </body>
 </html>
-
-
-
