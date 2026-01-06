@@ -1,257 +1,53 @@
-/* =========================
-   Reset & Global
-========================= */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-  font-family: 'Arial', sans-serif;
-}
-
-body {
-  background-color: #111; /* مشکی برای استودیو */
-  color: #fff;
-  overflow-x: hidden;
-}
-
-/* =========================
-   Header
-========================= */
-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 24px;
-  background-color: #111;
-  border-bottom: 2px solid #222;
-  position: sticky;
-  top: 0;
-  z-index: 1000;
-}
-
-header h1 {
-  font-size: 1.6rem;
-  color: #7be8a6; /* نئون سبز */
-  text-shadow: 0 0 8px #7be8a6, 0 0 16px #7be8a6;
-}
-
-header .transport {
-  display: flex;
-  gap: 12px;
-}
-
-header .transport button {
-  background: linear-gradient(90deg, #ff4d6d, #ff79a2);
-  border: none;
-  color: #fff;
-  padding: 8px 16px;
-  font-weight: bold;
-  cursor: pointer;
-  border-radius: 6px;
-  text-shadow: 0 0 6px #fff;
-  box-shadow: 0 0 6px #ff4d6d, 0 0 12px #ff79a2;
-  transition: 0.2s;
-}
-
-header .transport button:hover {
-  box-shadow: 0 0 12px #ff4d6d, 0 0 24px #ff79a2;
-  transform: scale(1.05);
-}
-
-/* =========================
-   Controls
-========================= */
-.controls {
-  padding: 12px 24px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  border-bottom: 1px solid #222;
-}
-
-.controls label {
-  display: flex;
-  flex-direction: column;
-  font-size: 12px;
-  color: #bbb;
-  gap: 4px;
-}
-
-.controls input[type=range] {
-  -webkit-appearance: none;
-  width: 150px;
-  height: 6px;
-  background: #333;
-  border-radius: 3px;
-  outline: none;
-}
-
-.controls input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  background: #7be8a6;
-  border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 0 8px #7be8a6;
-}
-
-.controls input[type=range]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  background: #7be8a6;
-  border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 0 8px #7be8a6;
-}
-
-/* =========================
-   Timeline Container
-========================= */
-.timeline-container {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px 24px;
-  overflow-x: hidden;
-}
-
-/* =========================
-   Timeline Track
-========================= */
-.timeline {
-  background-color: #1a1a1a;
-  border: 1px solid #222;
-  border-radius: 6px;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.timeline-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.timeline-header .rec,
-.timeline-header .stop {
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: bold;
-  border-radius: 4px;
-  border: none;
-  cursor: pointer;
-  color: #fff;
-  text-shadow: 0 0 4px #fff;
-  transition: 0.2s;
-}
-
-.timeline-header .rec {
-  background: linear-gradient(90deg, #ff3a3a, #ff6a6a);
-  box-shadow: 0 0 6px #ff3a3a, 0 0 12px #ff6a6a;
-}
-
-.timeline-header .rec:hover {
-  box-shadow: 0 0 12px #ff3a3a, 0 0 24px #ff6a6a;
-}
-
-.timeline-header .stop {
-  background: linear-gradient(90deg, #444, #666);
-  box-shadow: 0 0 4px #888;
-}
-
-.timeline-header .stop:disabled {
-  opacity: 0.3;
-  cursor: default;
-  box-shadow: none;
-}
-
-.timeline-info {
-  font-size: 13px;
-  color: #7be8a6;
-  text-shadow: 0 0 6px #7be8a6;
-}
-
-.start-time-display {
-  font-size: 11px;
-  color: #bbb;
-}
-
-/* =========================
-   Waveform Canvas
-========================= */
-.timeline-track {
-  overflow-x: auto;
-  background-color: #111;
-  border-radius: 4px;
-  height: 100px;
-  position: relative;
-}
-
-.wave-canvas {
-  display: block;
-  width: 100%;
-  height: 100px;
-  background-color: #111;
-}
-
-/* =========================
-   Master Cursor
-========================= */
+/* master cursor canvas should NOT capture pointer events */
 #masterCursor {
   position: absolute;
-  top: 140px; /* header + controls height */
+  top: 140px; /* تنظیم مطابق ساختار صفحه تو */
   left: 0;
   width: 100%;
   height: calc(100% - 140px);
-  pointer-events: auto;
-  z-index: 900;
+  pointer-events: none; /* <-- بسیار مهم: اجازه بده کلیک‌ها به زیر برن */
+  z-index: 150;
 }
 
-/* =========================
-   Scrollbar styling (optional)
-========================= */
-.timeline-track::-webkit-scrollbar {
-  height: 10px;
+/* Small visible handle the user can grab to move cursor.
+   It will sit on top of the cursor line and accept pointer events. */
+#cursorHandle {
+  position: absolute;
+  top: 140px;               /* align with masterCursor top */
+  width: 28px;
+  height: calc(100% - 140px);
+  margin-left: -14px;       /* center handle on cursor X */
+  pointer-events: auto;     /* handle receives pointer events */
+  z-index: 160;             /* above canvas but below headers if needed */
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  cursor: ew-resize;
 }
 
-.timeline-track::-webkit-scrollbar-track {
-  background: #222;
-  border-radius: 6px;
+/* handle visual: thin neon line + wider transparent hit area */
+#cursorHandle .hit {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(127,255,212,0.03), rgba(127,255,212,0.02));
 }
 
-.timeline-track::-webkit-scrollbar-thumb {
-  background: #7be8a6;
-  border-radius: 6px;
+#cursorHandle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(255,80,80,0.95), rgba(255,0,0,0.6));
+  box-shadow: 0 0 10px rgba(255,0,0,0.25);
+  border-radius: 2px;
+  pointer-events: none;
+  opacity: 0.95;
 }
 
-.timeline-track::-webkit-scrollbar-thumb:hover {
-  background: #4ec68d;
-}
-
-/* =========================
-   Responsive
-========================= */
-@media (max-width: 768px) {
-  header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-
-  .controls {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .timeline-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-  }
+/* for small screens reduce handle width slightly */
+@media (max-width: 480px) {
+  #cursorHandle { width: 22px; margin-left: -11px; }
 }
