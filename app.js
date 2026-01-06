@@ -550,8 +550,44 @@ async function startPlaybackFromCursor() {
   if (isPlaying) return;
   masterPlayBtn.click();
 }
+let handleDragging = false;
+
+cursorHandle.addEventListener('pointerdown', (e) => {
+  if (!e.isPrimary) return;
+  e.preventDefault();
+  handleDragging = true;
+  // ensure audio context running
+  ensureAudioContextRunning();
+  // if playing, stop and enter scrub mode
+  if (isPlaying) stopAllSources();
+  startScrubMode();
+  // capture pointer to receive move/up on this element (some browsers)
+  cursorHandle.setPointerCapture && cursorHandle.setPointerCapture(e.pointerId);
+});
+
+window.addEventListener('pointermove', (e) => {
+  if (!handleDragging) return;
+  const rect = cursorCanvas.getBoundingClientRect();
+  // compute X relative to viewport and page
+  const clientX = e.clientX;
+  // compute globalX = currentPage*pageWidth + (clientX - rect.left)
+  const globalX = currentPage * pageWidth + (clientX - rect.left);
+  setProjectCursorTime(globalX / PIXELS_PER_SECOND);
+  // scrubLoop will produce audio via performScrubAt
+});
+
+window.addEventListener('pointerup', (e) => {
+  if (!handleDragging) return;
+  handleDragging = false;
+  // release pointer capture
+  try { cursorHandle.releasePointerCapture && cursorHandle.releasePointerCapture(e.pointerId); } catch(e) {}
+  stopScrubMode();
+  // if you want auto play on release, uncomment:
+  // startPlaybackFromCursor();
+});
 
 // initial visual
 updateCursorVisual();
+
 
 
