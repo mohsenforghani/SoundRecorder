@@ -323,6 +323,19 @@ window.addEventListener("mousemove", (e) => {
   scrubPlayFromCursor();
 });
 
+
+cursorCanvas.addEventListener("touchstart", (e)=> { isDraggingCursor=true; });
+window.addEventListener("touchend", ()=>{ isDraggingCursor=false; });
+window.addEventListener("touchmove", (e)=>{
+  if(!isDraggingCursor) return;
+  const touch=e.touches[0];
+  const rect=cursorCanvas.getBoundingClientRect();
+  const moveX=touch.clientX-rect.left;
+  const globalX=currentPage*pageWidth+moveX;
+  setProjectCursorTime(globalX/PIXELS_PER_SECOND);
+});
+
+
 // Also allow clicking on timeline track to set cursor
 timelineContainer.addEventListener("click", (e) => {
   const target = e.target;
@@ -393,3 +406,4 @@ function animateCursorDuringPlay() {
 
   animationId = requestAnimationFrame(animateCursorDuringPlay);
 }
+
