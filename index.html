@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AudioFX Recorder</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>AudioFX Recorder</h1>
+
+  <button id="startBtn">شروع ضبط</button>
+  <button id="stopBtn" disabled>توقف ضبط</button>
+
+  <h2>افکت‌ها</h2>
+  <label>
+    <input type="checkbox" id="echoEffect"> Echo
+  </label>
+  <label>
+    <input type="checkbox" id="speedEffect"> افزایش سرعت 1.5x
+  </label>
+
+  <h2>پخش و دانلود</h2>
+  <audio id="player" controls></audio>
+  <button id="downloadBtn" disabled>دانلود</button>
+
+  <script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/service-worker.js')
+    .then(() => console.log('Service Worker ثبت شد'))
+    .catch(err => console.error('Service Worker خطا:', err));
+}
+</script>
+</body>
+</html>
