@@ -2,36 +2,58 @@
 <html lang="fa">
 <head>
   <meta charset="UTF-8">
+  <title>Web Audio DAW</title>
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AudioFX Recorder</title>
+  <meta name="theme-color" content="#111111">
+
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-  <h1>AudioFX Recorder</h1>
 
-  <button id="startBtn">شروع ضبط</button>
-  <button id="stopBtn" disabled>توقف ضبط</button>
+<!-- ================= HEADER ================= -->
+<header>
+  <h1>Web Audio DAW</h1>
 
-  <h2>افکت‌ها</h2>
-  <label>
-    <input type="checkbox" id="echoEffect"> Echo
+  <div class="transport">
+    <button id="masterPlay">▶ Play</button>
+    <button id="masterStop">■ Stop</button>
+  </div>
+</header>
+
+<!-- ================= MASTER CONTROLS ================= -->
+<section class="controls">
+  <label class="volume">
+    <span>MASTER VOLUME</span>
+    <input
+      type="range"
+      id="masterVolume"
+      min="0"
+      max="1"
+      step="0.01"
+      value="1"
+    >
   </label>
-  <label>
-    <input type="checkbox" id="speedEffect"> افزایش سرعت 1.5x
-  </label>
+</section>
 
-  <h2>پخش و دانلود</h2>
-  <audio id="player" controls></audio>
-  <button id="downloadBtn" disabled>دانلود</button>
+<!-- ================= TIMELINES ================= -->
+<section class="timeline-container" id="timelineContainer">
+  <!-- 10 تایم‌لاین توسط app.js ساخته می‌شوند -->
+</section>
 
-  <script src="app.js"></script>
+<!-- ================= GLOBAL CURSOR ================= -->
+<canvas id="masterCursor"></canvas>
+
+<!-- ================= SCRIPTS ================= -->
+<script src="app.js"></script>
+
 <script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/service-worker.js')
-    .then(() => console.log('Service Worker ثبت شد'))
-    .catch(err => console.error('Service Worker خطا:', err));
-}
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+  }
 </script>
+
 </body>
 </html>
