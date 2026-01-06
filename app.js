@@ -460,36 +460,6 @@ function stopScrubMode() {
 // allow pointer events — ensure in CSS #masterCursor { pointer-events: auto; }
 let draggingCursor = false;
 
-cursorCanvas.addEventListener("pointerdown", (e) => {
-  if (!e.isPrimary) return;
-  // compute pointer position
-  const rect = cursorCanvas.getBoundingClientRect();
-  const clickX = e.clientX - rect.left;
-  const globalX = currentPage * pageWidth + clickX;
-  setProjectCursorTime(globalX / PIXELS_PER_SECOND);
-  // start scrubbing
-  startScrubMode();
-  draggingCursor = true;
-  e.preventDefault();
-});
-
-window.addEventListener("pointermove", (e) => {
-  if (!draggingCursor) return;
-  const rect = cursorCanvas.getBoundingClientRect();
-  const moveX = e.clientX - rect.left;
-  const globalX = currentPage * pageWidth + moveX;
-  setProjectCursorTime(globalX / PIXELS_PER_SECOND);
-  // scrub will pick up via scrubLoop
-});
-
-window.addEventListener("pointerup", (e) => {
-  if (!draggingCursor) return;
-  draggingCursor = false;
-  // stop scrubbing but also start full playback from cursor if desired
-  stopScrubMode();
-  // auto-start playback from cursor on release if user prefers:
-  // startPlaybackFromCursor();
-});
 
 // clicking on track canvases: single-shot scrub
 timelineContainer.addEventListener("click", (e) => {
@@ -583,4 +553,5 @@ async function startPlaybackFromCursor() {
 
 // initial visual
 updateCursorVisual();
+
 
