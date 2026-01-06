@@ -1,7 +1,12 @@
+// ==========================
+// Web Audio DAW - app.js
+// ==========================
+
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 const masterGain = audioContext.createGain();
 masterGain.connect(audioContext.destination);
 
+// کنترل ولوم اصلی
 document.getElementById("masterVolume").oninput = e => {
   masterGain.gain.value = e.target.value;
 };
@@ -23,7 +28,6 @@ let animationId = null;
 // ==========================
 // ساخت تایم‌لاین‌ها
 // ==========================
-
 for (let i = 0; i < TIMELINE_COUNT; i++) {
   createTimeline(i);
 }
@@ -51,53 +55,66 @@ function createTimeline(index) {
   timelines[index] = {
     buffer: null,
     startTime: 0,
-    analyser
+    analyser,
+    isRecording: false
   };
 
   let recorder;
   let chunks = [];
 
- el.querySelector(".rec").onclick = async () => {
   const recBtn = el.querySelector(".rec");
   const stopBtn = el.querySelector(".stop");
 
-  recBtn.disabled = true;
-  stopBtn.disabled = false;
+  // ==========================
+  // ضبط صدا
+  // ==========================
+  recBtn.onclick = async () => {
+    try {
+      recBtn.disabled = true;
+      stopBtn.disabled = false;
 
-  chunks = [];
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const source = audioContext.createMediaStreamSource(stream);
+      chunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const source = audioContext.createMediaStreamSource(stream);
 
-  // اتصال همزمان به Analyser و MasterGain
-  source.connect(analyser);
-  source.connect(masterGain);
+      source.connect(analyser);
+      source.connect(masterGain);
 
-  recorder = new MediaRecorder(stream);
-  recorder.ondataavailable = e => chunks.push(e.data);
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = e => chunks.push(e.data);
 
-  recorder.onstop = async () => {
-    const blob = new Blob(chunks);
-    const arrayBuffer = await blob.arrayBuffer();
-    timelines[index].buffer = await audioContext.decodeAudioData(arrayBuffer);
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks);
+        const arrayBuffer = await blob.arrayBuffer();
+        timelines[index].buffer = await audioContext.decodeAudioData(arrayBuffer);
 
-    recBtn.disabled = false;
-    stopBtn.disabled = true;
+        recBtn.disabled = false;
+        stopBtn.disabled = true;
+        timelines[index].isRecording = false;
+      };
+
+      recorder.start();
+      timelines[index].isRecording = true;
+      drawEQ(analyser, ctx);
+    } catch (err) {
+      console.error("خطا در گرفتن میکروفون:", err);
+      recBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
   };
 
-  recorder.start();
-  drawEQ(analyser, ctx);
-};
+  stopBtn.onclick = () => {
+    if (recorder && recorder.state === "recording") {
+      recorder.stop();
+    }
+  };
 
-el.querySelector(".stop").onclick = () => {
-  if (recorder && recorder.state === "recording") {
-    recorder.stop();
-  }
-};
+  timelineContainer.appendChild(el);
+}
 
 // ==========================
 // اکولایزر زنده تایم‌لاین
 // ==========================
-
 function drawEQ(analyser, ctx) {
   const data = new Uint8Array(analyser.frequencyBinCount);
 
@@ -110,15 +127,21 @@ function drawEQ(analyser, ctx) {
       ctx.fillRect(i * 3, ctx.canvas.height, 2, -v);
     });
 
-    requestAnimationFrame(draw);
+    if (isAnyRecording()) {
+      requestAnimationFrame(draw);
+    }
   }
   draw();
 }
 
-// ==========================
-// Play سراسری
-// ==========================
+// چک کردن اینکه آیا هنوز ضبطی در جریان است
+function isAnyRecording() {
+  return timelines.some(tl => tl.isRecording);
+}
 
+// ==========================
+// پخش سراسری
+// ==========================
 document.getElementById("masterPlay").onclick = () => {
   if (isPlaying) return;
 
@@ -143,13 +166,11 @@ document.getElementById("masterPlay").onclick = () => {
 // ==========================
 // Cursor سراسری
 // ==========================
-
 function animateCursor() {
   cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
   const elapsed = audioContext.currentTime - projectStartTime;
   const pixelsPerSecond = 100;
-
   const x = elapsed * pixelsPerSecond;
 
   cursorCtx.strokeStyle = "red";
@@ -160,4 +181,3 @@ function animateCursor() {
 
   animationId = requestAnimationFrame(animateCursor);
 }
-
