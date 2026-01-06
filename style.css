@@ -1,187 +1,105 @@
-/* =========================== */
-/* General Reset & Body Styling */
-/* =========================== */
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  font-family: Arial, sans-serif;
-}
+/* Reset & Body */
+* { box-sizing: border-box; margin:0; padding:0; font-family: Arial, sans-serif; }
+body { background: #1e1e1e; color:#fff; overflow-x:hidden; }
 
-body {
-  background-color: #1e1e1e;
-  color: #fff;
-  overflow-x: hidden;
-}
-
-button {
-  cursor: pointer;
-  border: none;
-  outline: none;
-  font-size: 14px;
-  padding: 5px 10px;
-  margin-right: 5px;
-  border-radius: 4px;
-  transition: 0.2s;
-}
-
-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* =========================== */
 /* Timeline Container */
-/* =========================== */
 #timelineContainer {
   display: flex;
   flex-direction: column;
-  gap: 15px;
-  padding: 10px;
-  overflow-x: hidden;
+  gap: 12px;
+  padding: 5px;
   overflow-y: auto;
-  height: calc(100vh - 60px); /* leave space for controls if needed */
+  height: 100vh; /* بهتر است JS ارتفاع واقعی را تنظیم کند */
 }
 
-/* =========================== */
 /* Timeline Block */
-/* =========================== */
 .timeline {
   background-color: #2a2a2a;
   border-radius: 6px;
-  padding: 5px;
+  padding: 4px;
   position: relative;
 }
 
 .timeline-header {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  margin-bottom: 5px;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
 }
 
-.timeline-header button.rec {
-  background-color: #e74c3c;
-  color: #fff;
-}
-
-.timeline-header button.rec:hover {
-  background-color: #ff5b4d;
-}
-
-.timeline-header button.stop {
-  background-color: #3498db;
-  color: #fff;
-}
-
-.timeline-header button.stop:hover {
-  background-color: #5dade2;
-}
-
-.timeline-header .timeline-info {
-  margin-left: 10px;
-  font-weight: bold;
-}
-
-.timeline-header .start-time-display {
-  margin-left: auto;
+.timeline-header button {
   font-size: 12px;
-  color: #bbb;
+  padding: 4px 8px;
+  margin-right: 4px;
+  border-radius: 4px;
+  border:none;
 }
 
-/* =========================== */
-/* Timeline Track & Waveform */
-/* =========================== */
+.timeline-header button.rec { background: #e74c3c; color: #fff; }
+.timeline-header button.stop { background: #3498db; color:#fff; }
+.timeline-header button:disabled { opacity:0.5; cursor:not-allowed; }
+
+.timeline-header .timeline-info { font-weight:bold; color:#ccc; margin-right:auto; }
+.timeline-header .start-time-display { font-size:11px; color:#bbb; }
+
+/* Track */
 .timeline-track {
-  overflow-x: auto;
+  overflow-x: scroll;
   overflow-y: hidden;
   background-color: #1c1c1c;
-  border-radius: 4px;
-  padding: 3px;
-  cursor: pointer;
-  width: 100%;
-  position: relative;
-  height: 100px;
-}
-
-.timeline-track::-webkit-scrollbar {
-  height: 8px;
-}
-
-.timeline-track::-webkit-scrollbar-thumb {
-  background: #555;
-  border-radius: 4px;
-}
-
-.timeline-track::-webkit-scrollbar-track {
-  background: #2a2a2a;
+  border-radius:4px;
+  height:100px;
+  width:100%;
+  -webkit-overflow-scrolling: touch; /* smooth scroll ios */
 }
 
 .wave-canvas {
-  display: block;
-  background-color: #1c1c1c;
-  height: 100px;
+  display:block;
+  height:100px;
+  background:#1c1c1c;
 }
 
-/* =========================== */
-/* Master Cursor Canvas */
-/* =========================== */
+/* Scrollbar small for mobile */
+.timeline-track::-webkit-scrollbar { height:6px; }
+.timeline-track::-webkit-scrollbar-thumb { background:#555; border-radius:3px; }
+.timeline-track::-webkit-scrollbar-track { background:#2a2a2a; }
+
+/* Master Cursor */
 #masterCursor {
-  position: fixed;
-  top: 0;
-  left: 0;
-  pointer-events: none; /* allow clicks to pass through */
-  z-index: 100;
+  position: absolute; /* fixed can break on mobile when scrolling */
+  top:0;
+  left:0;
+  width:100%;
+  height:100%;
+  pointer-events:none;
+  z-index:100;
 }
 
-/* =========================== */
-/* Master Controls (Play / Volume) */
-/* =========================== */
+/* Master Controls */
 #masterControls {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 50px;
-  background-color: #111;
-  display: flex;
-  align-items: center;
-  padding: 5px 10px;
-  z-index: 101;
+  position: sticky;
+  top:0;
+  left:0;
+  width:100%;
+  background:#111;
+  display:flex;
+  align-items:center;
+  padding:5px 8px;
+  z-index:101;
 }
 
-#masterControls button {
-  margin-right: 10px;
-  font-weight: bold;
-}
+#masterControls input[type=range] { width:120px; }
 
-#masterControls input[type=range] {
-  width: 150px;
-}
-
-/* =========================== */
-/* Recording Visual Feedback */
-/* =========================== */
+/* Recording feedback */
 .wave-canvas.recording {
-  border: 1px solid #e74c3c;
-  box-shadow: 0 0 8px #e74c3c;
-  transition: 0.2s;
+  border:1px solid #e74c3c;
+  box-shadow: 0 0 6px #e74c3c;
 }
 
-/* =========================== */
-/* Responsive Adjustments */
-/* =========================== */
-@media (max-width: 768px) {
-  .timeline-track {
-    height: 80px;
-  }
-
-  .wave-canvas {
-    height: 80px;
-  }
-
-  button {
-    font-size: 12px;
-    padding: 4px 8px;
-  }
+/* Responsive */
+@media(max-width:600px){
+  .timeline-track { height:80px; }
+  .wave-canvas { height:80px; }
+  button { font-size:11px; padding:3px 6px; }
 }
