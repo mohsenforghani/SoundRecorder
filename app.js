@@ -1,56 +1,50 @@
-// app.js - Web Audio DAW (Recorder + Multitrack Playhead + Persistent Waveforms)
-
-/*
-  توضیحات:
-  - 10 تایم‌لاین می‌سازیم.
-  - هر تایم‌لاین: دکمه REC و STOP، یک canvas برای wave.
-  - ضبط: MediaRecorder -> chunks -> decode -> AudioBuffer
-  - رسم زنده: از AnalyserNode برای نمایش waveform هنگام ضبط استفاده می‌کنیم.
-  - پس از Stop: AudioBuffer را رسم (persistent) می‌کنیم.
-  - Play: همه کلیپ‌هایی که buffer دارند طبق timeline.startTime زمان‌بندی می‌شوند.
-*/
+// app.js - Multitrack DAW: Click/Drag cursor, Paging, 10-minute tracks, Play-from-cursor
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 const masterGain = audioContext.createGain();
 masterGain.connect(audioContext.destination);
 
-// master volume control
-const masterVolumeEl = document.getElementById("masterVolume");
-if (masterVolumeEl) {
-  masterVolumeEl.oninput = e => {
-    masterGain.gain.value = Number(e.target.value);
-  };
-}
+// CONFIG
+const PIXELS_PER_SECOND = 50;      // پیکسل به ازای هر ثانیه (می‌توان کم/زیاد کرد)
+const TRACK_DURATION_SECONDS = 600; // 10 minutes = 600s
+const TRACK_WIDTH_PX = TRACK_DURATION_SECONDS * PIXELS_PER_SECOND;
 
 const timelineContainer = document.getElementById("timelineContainer");
 const cursorCanvas = document.getElementById("masterCursor");
 const cursorCtx = cursorCanvas.getContext("2d");
+const masterPlayBtn = document.getElementById("masterPlay");
+const masterVolumeEl = document.getElementById("masterVolume");
 
+// resize cursor canvas to viewport area reserved for timelines
 function resizeCursorCanvas() {
   cursorCanvas.width = window.innerWidth;
-  cursorCanvas.height = window.innerHeight - 140; // مطابق style top
+  cursorCanvas.height = window.innerHeight - 140; // اگر header ارتفاع فردی دارد تنظیم کن
 }
 resizeCursorCanvas();
 window.addEventListener("resize", resizeCursorCanvas);
 
+if (masterVolumeEl) masterVolumeEl.oninput = e => masterGain.gain.value = Number(e.target.value);
+
+// Model
 const TIMELINE_COUNT = 10;
-const timelines = []; // هر المان: { buffer, startTime, analyser, isRecording, chunks, sourceNodes, canvas, ctx }
+const timelines = []; // each: { buffer, startTime, canvas, ctx, trackEl, analyser, isRecording, ... }
 
 let isPlaying = false;
-let projectStartTime = 0; // audioContext.currentTime وقتی play زده شد
+let projectStartTime = 0; // audioContext.currentTime at which playback reference starts
 let animationId = null;
-const PIXELS_PER_SECOND = 100; // برای محاسبه موقعیت کرسر
 
-// helper: resume audio context on first user gesture
+// Paging state (which page is visible)
+let currentPage = 0;
+const pageWidth = window.innerWidth; // viewport width in px
+
+// helper resume
 async function ensureAudioContextRunning() {
   if (audioContext.state === "suspended") {
-    try { await audioContext.resume(); } catch (e) { console.warn("resume audioContext failed", e); }
+    try { await audioContext.resume(); } catch (e) { console.warn(e); }
   }
 }
 
-// ==========================
-// create timelines
-// ==========================
+// Create timelines
 for (let i = 0; i < TIMELINE_COUNT; i++) createTimeline(i);
 
 function createTimeline(index) {
@@ -62,79 +56,86 @@ function createTimeline(index) {
       <button class="rec">● REC</button>
       <button class="stop" disabled>■ STOP</button>
       <span class="timeline-info">Track ${index + 1}</span>
+      <span class="start-time-display">start: 0.00s</span>
     </div>
-    <div class="timeline-track">
+    <div class="timeline-track" style="overflow-x:auto;">
       <canvas class="wave-canvas"></canvas>
     </div>
   `;
 
-  // append to DOM
   timelineContainer.appendChild(el);
 
+  const trackEl = el.querySelector(".timeline-track");
   const canvas = el.querySelector(".wave-canvas");
   const ctx = canvas.getContext("2d");
-
-  // set canvas size; width large so waveform can be wide — we'll scale to width
-  canvas.width = Math.max(800, timelineContainer.clientWidth - 40);
-  canvas.height = 80;
+  // set full width for 10 minutes
+  canvas.width = TRACK_WIDTH_PX;
+  canvas.height = 100;
 
   const analyser = audioContext.createAnalyser();
-  analyser.fftSize = 2048; // زمان‌نمایی بهتر برای wave
-  const analyserBufferLength = analyser.fftSize;
-  const analyserData = new Uint8Array(analyserBufferLength);
+  analyser.fftSize = 2048;
+  const analyserData = new Uint8Array(analyser.fftSize);
 
-  // timeline model
   timelines[index] = {
-    buffer: null,            // AudioBuffer after decode
-    startTime: 0,           // start time in project (seconds)
+    buffer: null,
+    startTime: 0,
+    canvas,
+    ctx,
+    trackEl,
     analyser,
     analyserData,
     isRecording: false,
     chunks: null,
     recorder: null,
     mediaStream: null,
-    sourceNodes: [],        // active playback sources (for stop)
-    canvas,
-    ctx,
-    widthScale: 1           // used when drawing persistent waveform
+    sourceNodes: []
   };
 
-  // UI buttons
+  // show start time text
+  const startTimeDisplay = el.querySelector(".start-time-display");
+  function updateStartDisplay() {
+    startTimeDisplay.innerText = `start: ${timelines[index].startTime.toFixed(2)}s`;
+  }
+
+  // Buttons
   const recBtn = el.querySelector(".rec");
   const stopBtn = el.querySelector(".stop");
 
-  // ==========================
+  // Click-on-canvas to set clip start or set global cursor (we'll use click on canvas to set cursor)
+  canvas.addEventListener("click", (ev) => {
+    // compute globalX: clickX + trackEl.scrollLeft
+    const rect = canvas.getBoundingClientRect();
+    const clickX = ev.clientX - rect.left;
+    const globalX = clickX + trackEl.scrollLeft;
+    // set clip start to clicked time (optional) OR set global cursor time — user requested cursor by click on page
+    // we set project cursor here:
+    setProjectCursorTime(globalX / PIXELS_PER_SECOND);
+  });
+
   // REC handler
-  // ==========================
   recBtn.onclick = async () => {
     await ensureAudioContextRunning();
-
-    // prevent double start
     if (timelines[index].isRecording) return;
 
+    // set startTime to current cursor position (if playing) or to current project cursor
+    const curTime = getProjectCursorTime();
+    timelines[index].startTime = Math.max(0, curTime);
+    updateStartDisplay();
+
+    recBtn.disabled = true;
+    stopBtn.disabled = false;
+
+    timelines[index].chunks = [];
+    timelines[index].isRecording = true;
+
     try {
-      // set track's startTime to current project cursor if playing, else 0
-      const timelineStart = isPlaying ? Math.max(0, audioContext.currentTime - projectStartTime) : 0;
-      timelines[index].startTime = timelineStart;
-
-      recBtn.disabled = true;
-      stopBtn.disabled = false;
-
-      // prepare recording
-      timelines[index].chunks = [];
-      timelines[index].isRecording = true;
-
-      // get microphone
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       timelines[index].mediaStream = stream;
 
-      // create nodes
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(timelines[index].analyser);
-      // also connect to master so user hears monitoring during recording:
-      source.connect(masterGain);
+      source.connect(masterGain); // monitor
 
-      // create media recorder
       const recorder = new MediaRecorder(stream);
       timelines[index].recorder = recorder;
 
@@ -143,75 +144,76 @@ function createTimeline(index) {
       };
 
       recorder.onstop = async () => {
-        // decode recorded data into AudioBuffer
         const blob = new Blob(timelines[index].chunks, { type: "audio/webm" });
         const arrayBuffer = await blob.arrayBuffer();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer).catch(err => {
-          console.error("decodeAudioData failed:", err);
-          return null;
-        });
-        if (audioBuffer) {
+        try {
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
           timelines[index].buffer = audioBuffer;
-          // draw persistent waveform based on buffer
           drawPersistentWaveform(index);
+        } catch (err) {
+          console.error("decode error", err);
         }
 
-        // cleanup
+        // cleanup stream
         timelines[index].isRecording = false;
-        timelines[index].recorder = null;
-        // stop tracks on stream
         if (timelines[index].mediaStream) {
           timelines[index].mediaStream.getTracks().forEach(t => t.stop());
           timelines[index].mediaStream = null;
         }
+        timelines[index].recorder = null;
 
         recBtn.disabled = false;
         stopBtn.disabled = true;
       };
 
-      // start recording and live visualization
       recorder.start();
-      drawLiveWaveform(index); // starts animation loop until recording ends
+      drawLiveWaveform(index); // loop while recording
     } catch (err) {
-      console.error("Could not start recording:", err);
+      console.error("getUserMedia error:", err);
+      timelines[index].isRecording = false;
       recBtn.disabled = false;
       stopBtn.disabled = true;
-      timelines[index].isRecording = false;
     }
   };
 
-  // ==========================
-  // STOP handler (per-track)
-  // ==========================
+  // STOP handler
   stopBtn.onclick = () => {
     const rec = timelines[index].recorder;
-    if (rec && rec.state === "recording") {
-      rec.stop();
-    }
+    if (rec && rec.state === "recording") rec.stop();
   };
+
+  // make track horizontally large and pageable: ensure its scrollLeft aligns to pages
+  // when user scrolls manually we update currentPage accordingly (optional)
+  trackEl.addEventListener("scroll", () => {
+    const newPage = Math.floor(trackEl.scrollLeft / pageWidth);
+    if (newPage !== currentPage) {
+      // if user scrolls a single track manually, sync pages across all tracks
+      currentPage = newPage;
+      syncAllTracksToPage(currentPage);
+    }
+  });
 }
 
-// ==========================
-// Live waveform drawing (during recording)
-// uses analyser.getByteTimeDomainData
-// ==========================
+// ---------------------------
+// Live waveform (during recording)
+// ---------------------------
 function drawLiveWaveform(index) {
   const tl = timelines[index];
   if (!tl || !tl.isRecording) return;
-
   const { analyser, analyserData, canvas, ctx } = tl;
   const w = canvas.width;
   const h = canvas.height;
 
-  function draw() {
-    if (!tl.isRecording) return; // stop loop when recording finished
-
+  function loop() {
+    if (!tl.isRecording) return;
     analyser.getByteTimeDomainData(analyserData);
+
+    // draw background translucent to create "tail" effect
     ctx.fillStyle = "rgba(0,0,0,0.15)";
     ctx.fillRect(0, 0, w, h);
 
     ctx.lineWidth = 2;
-    ctx.strokeStyle = "#0f0";
+    ctx.strokeStyle = "#7be8a6";
     ctx.beginPath();
 
     const sliceWidth = w / analyserData.length;
@@ -225,56 +227,45 @@ function drawLiveWaveform(index) {
     }
     ctx.stroke();
 
-    requestAnimationFrame(draw);
+    requestAnimationFrame(loop);
   }
-  // clear canvas before start
+
+  // clear and prepare
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "rgba(0,0,0,0.3)";
   ctx.fillRect(0, 0, w, h);
-
-  draw();
+  loop();
 }
 
-// ==========================
-// Persistent waveform drawing from AudioBuffer
-// drawPersistentWaveform(index)
-// ==========================
+// ---------------------------
+// Persistent waveform draw (from AudioBuffer)
+// ---------------------------
 function drawPersistentWaveform(index) {
   const tl = timelines[index];
   if (!tl || !tl.buffer) return;
-
   const buffer = tl.buffer;
   const canvas = tl.canvas;
   const ctx = tl.ctx;
   const w = canvas.width;
   const h = canvas.height;
-
-  // take first channel (mono) or mix channels
-  const channelData = buffer.numberOfChannels > 0 ? buffer.getChannelData(0) : new Float32Array(0);
-  const len = channelData.length;
-  if (len === 0) {
-    ctx.clearRect(0, 0, w, h);
-    return;
-  }
-
-  // samples per pixel
-  const samplesPerPixel = Math.max(1, Math.floor(len / w));
   ctx.clearRect(0, 0, w, h);
 
-  // background
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.fillRect(0, 0, w, h);
+  // mix down first channel (or average channels)
+  const channel = buffer.numberOfChannels > 0 ? buffer.getChannelData(0) : new Float32Array(0);
+  const len = channel.length;
+  if (len === 0) return;
 
-  // waveform color
+  const samplesPerPixel = Math.max(1, Math.floor(len / w));
+  ctx.fillStyle = "rgba(10,20,30,0.4)";
+  ctx.fillRect(0, 0, w, h);
   ctx.fillStyle = "#8fc1ff";
   const mid = h / 2;
 
   for (let x = 0; x < w; x++) {
     const start = x * samplesPerPixel;
-    let min = 1.0;
-    let max = -1.0;
+    let min = 1.0, max = -1.0;
     for (let j = 0; j < samplesPerPixel && (start + j) < len; j++) {
-      const v = channelData[start + j];
+      const v = channel[start + j];
       if (v < min) min = v;
       if (v > max) max = v;
     }
@@ -282,135 +273,193 @@ function drawPersistentWaveform(index) {
     const y2 = mid + max * mid;
     ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
   }
-
-  // store widthScale for potential future zoom
-  tl.widthScale = 1;
 }
 
-// ==========================
-// PLAY / SCHEDULER
-// - we schedule BufferSource nodes to start at projectStartTime + timeline.startTime
-// - this makes the global cursor playback match "cursor crossing" semantics
-// ==========================
-const masterPlayBtn = document.getElementById("masterPlay");
-if (masterPlayBtn) {
-  masterPlayBtn.addEventListener("click", async () => {
-    if (isPlaying) return;
-    await ensureAudioContextRunning();
+// ---------------------------
+// Cursor management
+// ---------------------------
+let projectCursorTime = 0; // seconds: global project cursor
+function setProjectCursorTime(t) {
+  projectCursorTime = Math.max(0, Math.min(t, TRACK_DURATION_SECONDS));
+  // update visible cursor and paging
+  updateCursorVisual();
+}
 
-    // clear any previous sources
-    stopAllSources();
+// get current project cursor: if playing, reflect audioContext time offset
+function getProjectCursorTime() {
+  if (isPlaying) {
+    const elapsedSinceStart = audioContext.currentTime - projectStartTime;
+    return Math.max(0, elapsedSinceStart + projectCursorTimeAtPlayStart); // handled below
+  }
+  return projectCursorTime;
+}
 
-    isPlaying = true;
-    projectStartTime = audioContext.currentTime + 0.05; // small delay for scheduling
-    timelines.forEach((tl, idx) => {
-      if (!tl || !tl.buffer) return;
+// When play starts we capture the start cursor and treat it as offset
+let projectCursorTimeAtPlayStart = 0;
 
-      // create source
-      const src = audioContext.createBufferSource();
-      src.buffer = tl.buffer;
+// draw cursor in the viewport (cursorCanvas). It should consider current page offset.
+function updateCursorVisual() {
+  // compute global pixel x of cursor
+  const globalX = projectCursorTime * PIXELS_PER_SECOND;
+  // compute which page it belongs to
+  const newPage = Math.floor(globalX / pageWidth);
+  if (newPage !== currentPage) {
+    currentPage = newPage;
+    syncAllTracksToPage(currentPage);
+  }
+  // compute screen x (relative to viewport)
+  const screenX = globalX - currentPage * pageWidth;
 
-      // connect through a per-track gain (future per-track volume)
-      const trackGain = audioContext.createGain();
-      trackGain.gain.value = 1.0;
-      src.connect(trackGain).connect(masterGain);
+  // draw
+  cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+  cursorCtx.strokeStyle = "red";
+  cursorCtx.lineWidth = 2;
+  cursorCtx.beginPath();
+  cursorCtx.moveTo(screenX, 0);
+  cursorCtx.lineTo(screenX, cursorCanvas.height);
+  cursorCtx.stroke();
+}
 
-      // record active source for potential stopping
-      tl.sourceNodes = tl.sourceNodes || [];
-      tl.sourceNodes.push(src);
-
-      // start at projectStartTime + tl.startTime
-      const startAt = projectStartTime + Math.max(0, tl.startTime || 0);
-      try {
-        src.start(startAt);
-      } catch (e) {
-        console.warn("src.start error", e);
-      }
-
-      // cleanup when ended
-      src.onended = () => {
-        // remove from active list
-        tl.sourceNodes = tl.sourceNodes.filter(s => s !== src);
-      };
-    });
-
-    animateCursor();
+// Sync all timeline horizontal scroll to page
+function syncAllTracksToPage(pageIndex) {
+  const scrollLeft = pageIndex * pageWidth;
+  timelines.forEach(tl => {
+    if (tl && tl.trackEl) tl.trackEl.scrollLeft = scrollLeft;
   });
 }
 
-// Stop all active playback sources
+// Click on the cursor canvas sets cursor time
+cursorCanvas.addEventListener("click", (e) => {
+  const rect = cursorCanvas.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  // compute globalX = page*pageWidth + clickX
+  const globalX = currentPage * pageWidth + clickX;
+  setProjectCursorTime(globalX / PIXELS_PER_SECOND);
+});
+
+// Dragging the cursor
+let isDraggingCursor = false;
+cursorCanvas.addEventListener("mousedown", (e) => {
+  isDraggingCursor = true;
+});
+window.addEventListener("mouseup", () => {
+  isDraggingCursor = false;
+});
+window.addEventListener("mousemove", (e) => {
+  if (!isDraggingCursor) return;
+  const rect = cursorCanvas.getBoundingClientRect();
+  const moveX = e.clientX - rect.left;
+  const globalX = currentPage * pageWidth + moveX;
+  setProjectCursorTime(globalX / PIXELS_PER_SECOND);
+});
+
+// Also allow clicking on any timeline area (the track) to set the cursor to that spot
+timelineContainer.addEventListener("click", (e) => {
+  const target = e.target;
+  if (target && target.classList && target.classList.contains("wave-canvas")) {
+    const canvas = target;
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const parent = canvas.parentElement; // .timeline-track
+    const globalX = clickX + parent.scrollLeft;
+    setProjectCursorTime(globalX / PIXELS_PER_SECOND);
+  }
+});
+
+// ---------------------------
+// PLAY from cursor
+// ---------------------------
+masterPlayBtn.addEventListener("click", async () => {
+  if (isPlaying) return;
+  await ensureAudioContextRunning();
+
+  // record cursor time at start (so we can compute offsets)
+  projectCursorTimeAtPlayStart = projectCursorTime;
+
+  // small scheduling delay
+  const startAt = audioContext.currentTime + 0.05;
+  projectStartTime = startAt - projectCursorTimeAtPlayStart; // so audioContext.currentTime - projectStartTime == elapsed from cursor start
+
+  // stop any previous sources
+  stopAllSources();
+
+  // schedule each timeline buffer relative to projectStartTime
+  timelines.forEach(tl => {
+    if (!tl.buffer) return;
+    const buf = tl.buffer;
+    const clipStart = tl.startTime || 0;
+    const clipEnd = clipStart + buf.duration;
+
+    // If the clip ends before the cursor position, skip
+    const playFrom = projectCursorTimeAtPlayStart; // seconds into project where playback begins
+    if (clipEnd <= playFrom) return; // clip already finished before cursor
+
+    // create source
+    const src = audioContext.createBufferSource();
+    src.buffer = buf;
+    const trackGain = audioContext.createGain();
+    src.connect(trackGain).connect(masterGain);
+
+    // compute offset into buffer and when to start
+    if (clipStart <= playFrom) {
+      // clip started before or at cursor -> start immediately from offset = playFrom - clipStart
+      const offset = Math.max(0, playFrom - clipStart);
+      try {
+        src.start(startAt, offset);
+      } catch (e) { console.warn(e); }
+    } else {
+      // clip starts after cursor -> schedule later at time (clipStart - playFrom) from startAt
+      const when = startAt + (clipStart - playFrom);
+      try {
+        src.start(when, 0);
+      } catch (e) { console.warn(e); }
+    }
+
+    tl.sourceNodes = tl.sourceNodes || [];
+    tl.sourceNodes.push(src);
+    src.onended = () => { tl.sourceNodes = tl.sourceNodes.filter(s => s !== src); };
+  });
+
+  isPlaying = true;
+  animateCursorDuringPlay();
+});
+
+// animate cursor during play; keep projectCursorTime updated as audioContext moves
+function animateCursorDuringPlay() {
+  if (!isPlaying) return;
+  // compute elapsed since projectStartTime
+  const elapsed = audioContext.currentTime - projectStartTime;
+  projectCursorTime = elapsed; // absolute project time
+  updateCursorVisual();
+
+  // if cursor goes beyond track duration stop playback automatically
+  if (projectCursorTime >= TRACK_DURATION_SECONDS) {
+    stopAllSources();
+    return;
+  }
+
+  animationId = requestAnimationFrame(animateCursorDuringPlay);
+}
+
+// stop all active sources and cancel animation
 function stopAllSources() {
   timelines.forEach(tl => {
     if (tl.sourceNodes && tl.sourceNodes.length) {
-      tl.sourceNodes.forEach(src => {
-        try {
-          src.stop();
-        } catch (e) {}
+      tl.sourceNodes.forEach(s => {
+        try { s.stop(); } catch (e) {}
       });
       tl.sourceNodes = [];
     }
   });
-  cancelAnimationFrame(animationId);
+  if (animationId) cancelAnimationFrame(animationId);
   animationId = null;
   isPlaying = false;
 }
 
-// allow stopping playback by clicking masterPlay again? we'll leave as simple: add a masterStop button handling if exists
-const masterStopBtn = document.getElementById("masterStop");
-if (masterStopBtn) {
-  masterStopBtn.addEventListener("click", () => {
-    stopAllSources();
-    // clear cursor visually
-    cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
-  });
-}
-
-// ==========================
-// Cursor animation - shows current project time
-// ==========================
-function animateCursor() {
-  if (!isPlaying) return;
-
-  cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
-
-  const elapsed = audioContext.currentTime - projectStartTime; // seconds since play started
-  const x = elapsed * PIXELS_PER_SECOND;
-
-  // draw vertical cursor line
-  cursorCtx.strokeStyle = "red";
-  cursorCtx.lineWidth = 2;
-  cursorCtx.beginPath();
-  cursorCtx.moveTo(x, 0);
-  cursorCtx.lineTo(x, cursorCanvas.height);
-  cursorCtx.stroke();
-
-  animationId = requestAnimationFrame(animateCursor);
-}
-
-// ==========================
-// Utility: when a recording finished, ensure persistent waveform is visible
-// ==========================
-// (Already handled in recorder.onstop -> drawPersistentWaveform)
-
-// ==========================
-// Optional: set timeline start time by clicking on its canvas
-// (so user can move where the recorded clip starts)
-// ==========================
-timelineContainer.addEventListener("click", (e) => {
-  const target = e.target;
-  if (target && target.classList && target.classList.contains("wave-canvas")) {
-    // find which timeline index
-    for (let i = 0; i < timelines.length; i++) {
-      if (timelines[i].canvas === target) {
-        // compute clicked time in seconds relative to canvas left
-        const rect = target.getBoundingClientRect();
-        const clickX = e.clientX - rect.left;
-        const newStartSeconds = clickX / PIXELS_PER_SECOND;
-        timelines[i].startTime = Math.max(0, newStartSeconds);
-        // optional: draw an indicator of startTime (not implemented here)
-        break;
-      }
-    }
-  }
+// allow master stop if exists externally (you removed header stop previously) — we'll support double-clicking Play to stop
+masterPlayBtn.addEventListener("dblclick", () => {
+  stopAllSources();
 });
 
+// initial draw of cursor
+updateCursorVisual();
